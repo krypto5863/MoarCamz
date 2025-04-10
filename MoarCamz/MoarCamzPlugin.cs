@@ -40,6 +40,8 @@ namespace MoarCamz
         public static ConfigEntry<KeyboardShortcut> NextCameraButton { get; set; }
         public static ConfigEntry<KeyboardShortcut> PrevCameraButton { get; set; }
 
+        public static ConfigEntry<KeyboardShortcut> DeleteModifier { get; set; }
+
         private static float FastDragPosIncrement => FastDragPosStepper.Value * SCALE_COEFFICIENT;
         private static float FastDragPosDecrement => FastDragPosStepper.Value * -1f * SCALE_COEFFICIENT;
         private static float SlowDragPosIncrement => SlowDragPosStepper.Value * SCALE_COEFFICIENT;
@@ -123,9 +125,10 @@ namespace MoarCamz
             NextCameraButton = Config.Bind("Hotkeys", "Next Set Camera", new KeyboardShortcut(KeyCode.KeypadPlus));
             PrevCameraButton = Config.Bind("Hotkeys", "Prev Set Camera", new KeyboardShortcut(KeyCode.KeypadMinus));
 
+            DeleteModifier = Config.Bind("Hotkeys", "Delete Camera", new KeyboardShortcut(KeyCode.LeftShift), "Holding this key and clicking on a camera will delete it.");
 
             var harmony = new Harmony(GUID);
-            harmony.Patch(typeof(StudioScene).GetMethod(nameof(StudioScene.OnClickLoadCamera)), null, new HarmonyMethod(typeof(MoarCamzPlugin).GetMethod(nameof(MoarCamzPlugin.OnClickLoadCameraPostfix), AccessTools.all)));
+            harmony.Patch(typeof(StudioScene).GetMethod(nameof(StudioScene.OnClickLoadCamera)), new HarmonyMethod(typeof(MoarCamzPlugin).GetMethod(nameof(MoarCamzPlugin.OnClickLoadCameraPrefix), AccessTools.all)), new HarmonyMethod(typeof(MoarCamzPlugin).GetMethod(nameof(MoarCamzPlugin.OnClickLoadCameraPostfix), AccessTools.all)));
             harmony.Patch(typeof(StudioScene).GetMethod(nameof(StudioScene.OnClickSaveCamera)), null, new HarmonyMethod(typeof(MoarCamzPlugin).GetMethod(nameof(MoarCamzPlugin.OnClickSaveCameraPostfix), AccessTools.all)));
 #if KKS || KK
             harmony.Patch(AccessTools.Method(typeof(Studio.CameraControl), "LateUpdate"), null, new HarmonyMethod(typeof(MoarCamzPlugin).GetMethod(nameof(MoarCamzPlugin.CameraControlInternalUpdateCameraStatePostfix), AccessTools.all)));
@@ -1102,7 +1105,17 @@ namespace MoarCamz
             saveButton.onClick.AddListener(() => { lastSelectedCamera = slotNumber - 1; data.Save(); });
             Button loadButton = newCamSlotTransform.Find("Button Load").GetComponent<Button>();
             loadButton.onClick = new Button.ButtonClickedEvent();
-            loadButton.onClick.AddListener(() => { lastSelectedCamera = slotNumber - 1; data.Load(true); });
+            loadButton.onClick.AddListener(() =>
+            {
+                if (DeleteModifier.Value.IsDown() || DeleteModifier.Value.IsPressed())
+                {
+                    data.Clear();
+                    data.ClearExtended();
+                    return;
+                }
+
+                lastSelectedCamera = slotNumber - 1; data.Load(true);
+            });
             loadButton.GetComponent<Image>().sprite = blankCameraPrefab.GetComponent<Image>().sprite;
             Transform textGO = GameObject.Instantiate(blankCameraPrefab.transform.Find("CamNumText"), loadButton.transform);
             textGO.GetComponent<Text>().text = slotNumber.ToString();
@@ -1137,6 +1150,22 @@ namespace MoarCamz
 #else
             cameraScroll.content.sizeDelta = new Vector2(432 + (40 * (MoarCamz.Count - 10)), cameraScroll.content.sizeDelta.y);
 #endif
+        }
+
+        private static bool OnClickLoadCameraPrefix(int _no)
+        {
+            if (DeleteModifier.Value.IsPressed() || DeleteModifier.Value.IsDown())
+            {
+#if DEBUG
+                MoarCamzPlugin.Instance.Log.LogDebug($"Deleting camera at {_no}.");
+#endif
+                MoarCamzPlugin.Instance.MoarCamz[_no].ClearExtended();
+                Singleton<global::Studio.Studio>.Instance.sceneInfo.cameraData[_no] =
+                    Singleton<StudioScene>.Instance.cameraInfo.cameraCtrl.ExportResetData();
+                return false;
+            }
+
+            return true;
         }
 
         private static void OnClickLoadCameraPostfix(int _no)
